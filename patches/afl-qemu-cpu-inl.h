@@ -200,7 +200,7 @@ static void update_afl_htable(target_ulong pc) {
     if (index > 0 && index < procmap.count) {
       unsigned long from = procmap.entries[index].from;
       char* name = procmap.entries[index].name;
-      fprintf(out_file, "%ld %s+0x%lx\n", testcase_id, name, pc - from);
+      fprintf(out_file, "%ld, %s+0x%lx\n", testcase_id, name, pc - from);
     } else {
       fprintf(out_file, "%ld, 0x%lx\n", testcase_id, pc);
     }
