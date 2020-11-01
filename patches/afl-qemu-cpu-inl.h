@@ -216,7 +216,8 @@ static void print_mappings(void) {
   if (!f) return;
 
   while (fgets(buf, MAX_LINE, f))
-    printf("%s", buf);
+    fprintf(out_file, "%s", buf);
+
 
   fclose(f);
 
