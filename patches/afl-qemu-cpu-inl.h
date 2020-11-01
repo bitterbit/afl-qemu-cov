@@ -151,6 +151,31 @@ static inline int is_valid_addr(target_ulong addr) {
 
 }
 
+struct procmap_entry {
+    char name[50];
+    char flags[4];
+    unsigned long from, to;
+};
+
+struct procmap_list {
+    struct procmap_entry *entries;
+    int count;
+};
+
+struct procmap_list procmap;
+
+static int find_procmap_module(unsigned long addr) {
+    // fprintf(out_file, "find_procmap module. count=%d looking for 0x%lx \n", procmap.count, addr);
+    for (size_t i=0; i<procmap.count; i++) {
+        struct procmap_entry e = procmap.entries[i];
+        // fprintf(out_file, "find_procmap module. from 0x%lx to 0x%lx \n", e.from, e.to);
+        if (e.from <= addr && e.to >= addr)  {
+            return i;
+        }
+    }
+    return -1;
+}
+
 static void update_afl_htable(target_ulong pc) {
 
   if (pc > afl_end_code || pc < afl_start_code) return;
@@ -171,9 +196,52 @@ static void update_afl_htable(target_ulong pc) {
     ne->addr = pc;
     afl_area[cur_loc] = ne;
     
-    fprintf(out_file, "%ld, 0x%lx\n", testcase_id, pc);
+    int index = find_procmap_module(pc);
+    if (index > 0 && index < procmap.count) {
+      unsigned long from = procmap.entries[index].from;
+      char* name = procmap.entries[index].name;
+      fprintf(out_file, "%ld %s+0x%lx\n", testcase_id, name, pc - from);
+    } else {
+      fprintf(out_file, "%ld, 0x%lx\n", testcase_id, pc);
+    }
+
   }
 
+}
+
+static size_t count_lines(FILE* f) {
+    size_t lines = 0;
+    char ch;
+    while((ch = fgetc(f)) != EOF) {
+        if (ch == '\n') {
+            lines++;
+        }
+    }
+
+    fseek(f, 0, SEEK_SET);
+    return lines;
+}
+
+static void init_proc_mappings(void) {
+  u8    buf[MAX_LINE];
+  FILE *f = fopen("/proc/self/maps", "r");
+  if (!f) return;
+
+  size_t lines = count_lines(f);
+  procmap.count = lines;
+  procmap.entries = malloc(sizeof(struct procmap_entry) * lines);
+
+  size_t line=0;
+  while (fgets(buf, MAX_LINE, f)) {
+    struct procmap_entry *pme = &procmap.entries[line];
+    sscanf(buf, "%lx-%lx %4c %*x %*x:%*x %*s %s", &pme->from, &pme->to, pme->flags, pme->name);
+    pme->name[sizeof(pme->name) - 1] = 0;
+    line++;
+  }
+
+  struct procmap_entry e = procmap.entries[1];
+  // fprintf(out_file, "init proc mappings!!! 0x%lx - 0x%lx %s\n", e.from, e.to, e.name);
+  fclose(f);
 }
 
 static void afl_setup(void) {
@@ -186,6 +254,7 @@ static void afl_setup(void) {
   } else {
     out_file = stderr;
   }
+  init_proc_mappings();
   fprintf(out_file, "# testcase_id, bb_address\n");
 
   if (getenv("AFL_INST_LIBS")) {
@@ -208,6 +277,7 @@ static void afl_setup(void) {
 
 }
 
+
 static void print_mappings(void) {
 
   u8    buf[MAX_LINE];
@@ -218,10 +288,9 @@ static void print_mappings(void) {
   while (fgets(buf, MAX_LINE, f))
     fprintf(out_file, "%s", buf);
 
-
   fclose(f);
-
 }
+
 
 /* Fork server logic, invoked once we hit _start. */
 
@@ -231,6 +300,8 @@ static void afl_forkserver(CPUState *cpu) {
   forkserver_installed = 1;
   
   if (getenv("AFL_QEMU_DEBUG_MAPS")) print_mappings();
+
+  init_proc_mappings();
 
   if (write(FORKSRV_FD + 1, &testcase_id, 4) != 4) return;
 
