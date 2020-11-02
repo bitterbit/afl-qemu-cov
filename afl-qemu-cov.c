@@ -50,6 +50,29 @@ u8 child_timed_out;
 
 static u8 run_target(char **argv, u8 *mem, u32 len, u32 testcase_id);
 
+static void run_one_input(char **argv, u32 testcase_id, u8* fn) {
+    struct stat st;
+    s32 fd = open(fn, O_RDONLY);                             /* not tracked */
+
+    if (fstat(fd, &st) || access(fn, R_OK))
+      PFATAL("Unable to access '%s'", fn);
+
+    /* This also takes care of . and .. */
+    if (!S_ISREG(st.st_mode) || !st.st_size || strstr(fn, "/README.txt")) {
+      ck_free(fn);
+      return;
+    }
+
+    u8 *mem = mmap(0, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (mem == MAP_FAILED)
+      PFATAL("Unable to mmap '%s'", fn);
+
+    run_target(argv, mem, st.st_size, testcase_id);
+
+    munmap(mem, st.st_size);
+    close(fd);
+}
+
 static void collect_coverage(char **argv) {
 
   struct dirent **nl;
@@ -63,8 +86,17 @@ static void collect_coverage(char **argv) {
      the ordering  of test cases would vary somewhat randomly and would be
      difficult to control. */
 
-  nl_cnt = scandir(in_dir, &nl, NULL, alphasort);
+  struct stat stats;
+  stat(in_dir, &stats);
 
+  if (S_ISREG(stats.st_mode)) {
+    SAYF("%d/%d\t%s\n", 0, 0, in_dir);
+    run_one_input(argv, 0, in_dir); // in_dir is actually a file in this situation
+    return;
+  }
+
+
+  nl_cnt = scandir(in_dir, &nl, NULL, alphasort);
   if (nl_cnt < 0) {
 
     if (errno == ENOENT || errno == ENOTDIR)
@@ -77,44 +109,18 @@ static void collect_coverage(char **argv) {
   }
 
   for (i = 0; i < nl_cnt; ++i) {
-
     u32 testcase_id;
-
     if (nl[i]->d_name[0] == '.' ||
         sscanf(nl[i]->d_name, CASE_PREFIX "%06u", &testcase_id) != 1)
       continue;
 
     SAYF("%d/%d\t%s\n", testcase_id, nl_cnt - 2, nl[i]->d_name);
-
-    struct stat st;
-
     u8 *fn = alloc_printf("%s/%s", in_dir, nl[i]->d_name);
 
+    run_one_input(argv, testcase_id, fn);
+
+    ck_free(fn);
     free(nl[i]);
-
-    s32 fd = open(fn, O_RDONLY);                             /* not tracked */
-
-    if (fstat(fd, &st) || access(fn, R_OK))
-      PFATAL("Unable to access '%s'", fn);
-
-    /* This also takes care of . and .. */
-
-    if (!S_ISREG(st.st_mode) || !st.st_size || strstr(fn, "/README.txt")) {
-
-      ck_free(fn);
-      continue;
-
-    }
-
-    u8 *mem = mmap(0, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
-    if (mem == MAP_FAILED)
-      PFATAL("Unable to mmap '%s'", fn);
-
-    run_target(argv, mem, st.st_size, testcase_id);
-
-    munmap(mem, st.st_size);
-    
-    close(fd);
 
     if (stop_soon)
       break;
@@ -124,6 +130,8 @@ static void collect_coverage(char **argv) {
   free(nl);                                                  /* not tracked */
 
 }
+
+
 
 /* Write modified data to file for testing. If use_stdin is clear, the old file
    is unlinked and a new one is created. Otherwise, out_fd is rewound and
